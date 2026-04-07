@@ -169,12 +169,25 @@ class ProjectService:
             raise ValueError("Нет активного проекта.")
         if project not in registry.projects:
             raise ValueError(f"Проект '{project}' не найден в реестре.")
+        record = registry.projects[project]
+        workspace_root = self.paths.workspace.resolve()
+        project_path = record.path.resolve()
+        if project_path.parent != workspace_root:
+            raise ValueError(
+                f"Проект '{project}' вне workspace и недоступен для prepare-chat: {project_path}. "
+                "Выберите директорию из workspace."
+            )
         if project != registry.active_project:
             self.switch_project(project)
         self.index_project(name=project, max_files=max_files)
         self.sync_mcp_config()
         brief_path, _ = self.build_brief(name=project, format_name=format_name, handoff=False, write_history_copy=True)
-        self._append_worklog(project, f"Подготовлен новый чат: brief={brief_path.name}, format={format_name}.")
+        index_payload = load_index_json(self.paths.projects_memory / project / "index.json") or {}
+        indexed_count = int(index_payload.get("file_count", 0))
+        self._append_worklog(
+            project,
+            f"Подготовлен новый чат: active={project}, indexed_files={indexed_count}, brief={brief_path.name}, format={format_name}.",
+        )
         return project, brief_path
 
     def build_brief(

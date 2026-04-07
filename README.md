@@ -78,6 +78,7 @@ python scripts\run_cli.py prepare-chat [--project <name>] [--max-files 1500] [--
 5. Start a new LM Studio chat with `config\mcp\mcp.json`
 
 This keeps filesystem access, shell working directory, and memory/brief files aligned with one active project.
+`prepare-chat` is restricted to projects inside `workspace/`, which keeps sessions isolated and predictable.
 
 ## Notes on MCP scope
 

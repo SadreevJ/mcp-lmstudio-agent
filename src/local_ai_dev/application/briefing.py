@@ -64,6 +64,19 @@ def _read_tail_lines(path: Path, max_lines: int) -> str:
     return "\n".join(lines[-max_lines:]).strip()
 
 
+def _collect_rule_excerpts(paths: AppPaths, rule_paths: list[str], max_chars_each: int = 2000) -> str:
+    excerpts: list[str] = []
+    for rel in rule_paths:
+        target = paths.root / rel
+        if not target.is_file():
+            continue
+        text = _read_text_limited(target, max_chars_each)
+        if not text:
+            continue
+        excerpts.append(f"### {rel}\n\n{text}")
+    return "\n\n".join(excerpts).strip()
+
+
 def load_index_json(index_path: Path) -> dict[str, Any] | None:
     if not index_path.is_file():
         return None
@@ -294,11 +307,19 @@ def build_brief_markdown(
             add_section("Notes (tail)", _read_tail_lines(memory_dir / "notes.md", 30))
             add_section("Architecture", _read_text_limited(memory_dir / "architecture.md", 4000))
             add_section("Run commands", _read_text_limited(memory_dir / "run-commands.md", 3000))
+            lines.append("## Контракт выполнения\n")
+            lines.append("- Не писать «сделано», пока нет подтверждённых tool-результатов.")
+            lines.append("- Если правка не применена инструментами, явно указать «не применено».")
+            lines.append("- Работать только в scope активного проекта и его memory/brief.")
+            lines.append("")
 
         lines.append("## Applicable rules (paths)\n")
         for rp in rules_paths:
             lines.append(f"- `{rp}` (через MCP от корня репозитория или абсолютный путь)")
         lines.append("")
+        if format_name == "full":
+            rules_text = _collect_rule_excerpts(paths, rules_paths, max_chars_each=2000)
+            add_section("Applicable rules (excerpt)", rules_text)
 
         pr_file = paths.rules / "projects" / f"{project}.md"
         if format_name == "full" and pr_file.is_file():

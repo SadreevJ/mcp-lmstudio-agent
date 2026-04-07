@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
-import json
 from pathlib import Path
 
 
@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CLI = ROOT / "scripts" / "run_cli.py"
 
 
-def run_cli(args: list[str]) -> int:
+def run_cli(args: list[str], *, show_output: bool = False) -> subprocess.CompletedProcess[str]:
     print(f">>> python scripts\\run_cli.py {' '.join(args)}")
     completed = subprocess.run(
         [sys.executable, str(CLI), *args],
@@ -18,8 +18,16 @@ def run_cli(args: list[str]) -> int:
         text=True,
         encoding="utf-8",
         errors="replace",
+        capture_output=True,
     )
-    return completed.returncode
+    if show_output:
+        out = (completed.stdout or "").strip()
+        err = (completed.stderr or "").strip()
+        if out:
+            print(out)
+        if err:
+            print(err)
+    return completed
 
 
 def ensure_bootstrap() -> None:
@@ -27,7 +35,7 @@ def ensure_bootstrap() -> None:
     if registry.is_file():
         return
     print("Реестр не найден. Выполняю bootstrap...")
-    run_cli(["bootstrap"])
+    run_cli(["bootstrap"], show_output=True)
 
 
 def clear_screen() -> None:
@@ -44,6 +52,8 @@ def title() -> None:
     if active:
         print(f"Активный проект: {active}")
         print(f"Готовность: {readiness_line(active)}")
+        if not is_workspace_project(active):
+            print("Требуется действие: активный проект вне workspace. Выберите директорию через пункт 3.")
     print()
 
 
@@ -52,15 +62,29 @@ def pause() -> None:
 
 
 def prepare_project() -> None:
-    projects = load_project_names()
+    projects = list_workspace_projects()
     if projects:
         print(f"Доступные проекты: {', '.join(projects)}")
-    project = input("Выберите директорию проекта: ").strip()
+    project = input("Выберите директорию проекта из workspace: ").strip()
     if not project:
         print("Имя проекта пустое. Отмена.")
         return
+    if project not in projects:
+        print(f"Директория '{project}' не найдена в workspace. Отмена.")
+        return
     print(f"Текущая готовность для '{project}': {readiness_line(project)}")
-    run_cli(["prepare-chat", "--project", project])
+    result = run_cli(["prepare-chat", "--project", project], show_output=False)
+    if result.returncode != 0:
+        print("Требуется действие: подготовка проекта завершилась ошибкой.")
+        err = (result.stderr or "").strip() or (result.stdout or "").strip()
+        if err:
+            print(err.splitlines()[-1])
+        return
+    summary = prepared_facts(project)
+    print("OK: проект подготовлен.")
+    print(f"- active_project: {summary['active_project']}")
+    print(f"- index_file_count: {summary['index_file_count']}")
+    print(f"- brief: {summary['brief_path']}")
     print()
     print("Готово. Дальше в LM Studio:")
     print("1) Откройте новый чат")
@@ -68,41 +92,43 @@ def prepare_project() -> None:
     print(f"3) Начните работу по проекту '{project}'")
 
 
-def search_project() -> None:
-    project = input("Проект (Enter = активный): ").strip()
-    mode = input("Режим [file/text/todo/entrypoints/defs] (Enter = file): ").strip().lower() or "file"
-    query = ""
-    if mode in {"file", "text", "defs"}:
-        query = input("Запрос (можно пусто для file/defs): ").strip()
-    args = ["search-project", "--mode", mode, "--max-results", "30"]
-    if project:
-        args += ["--project", project]
-    if query:
-        args += ["--query", query]
-    run_cli(args)
-
-
-def load_project_names() -> list[str]:
+def load_registry_payload() -> dict:
     registry = ROOT / "data" / "context" / "registry.json"
     if not registry.is_file():
-        return []
+        return {}
     try:
-        payload = json.loads(registry.read_text(encoding="utf-8"))
+        return json.loads(registry.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
-        return []
-    return sorted((payload.get("projects") or {}).keys())
+        return {}
+
+
+def list_workspace_projects() -> list[str]:
+    payload = load_registry_payload()
+    projects = payload.get("projects") or {}
+    workspace_root = (ROOT / "workspace").resolve()
+    names: list[str] = []
+    for name, rec in projects.items():
+        raw_path = rec.get("path")
+        if not raw_path:
+            continue
+        try:
+            p = Path(raw_path).resolve()
+        except OSError:
+            continue
+        if p.parent == workspace_root:
+            names.append(str(name))
+    names.sort()
+    return names
 
 
 def load_active_project() -> str:
-    registry = ROOT / "data" / "context" / "registry.json"
-    if not registry.is_file():
-        return ""
-    try:
-        payload = json.loads(registry.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return ""
+    payload = load_registry_payload()
     active = payload.get("active_project")
     return str(active) if active else ""
+
+
+def is_workspace_project(project: str) -> bool:
+    return project in list_workspace_projects()
 
 
 def readiness_line(project: str) -> str:
@@ -118,56 +144,29 @@ def readiness_line(project: str) -> str:
     return ", ".join(status)
 
 
-def wizard_two_projects() -> None:
-    projects = load_project_names()
-    if projects:
-        print(f"Доступные проекты: {', '.join(projects)}")
-    first = input("Проект для первого чата (например: test2): ").strip()
-    second = input("Проект для второго чата (например: test1): ").strip()
-    if not first or not second:
-        print("Нужно указать оба проекта. Отмена.")
-        return
-    print()
-    print(f"Готовность '{first}': {readiness_line(first)}")
-    print(f"Готовность '{second}': {readiness_line(second)}")
-    print()
-    print(f"Шаг 1/2: подготавливаю '{first}'...")
-    if run_cli(["prepare-chat", "--project", first]) != 0:
-        print("Не удалось подготовить первый проект.")
-        return
-    print()
-    print("Откройте LM Studio -> новый чат -> подключите MCP -> начните работу.")
-    input("Нажмите Enter после завершения шага в LM Studio...")
-    print()
-    print(f"Шаг 2/2: подготавливаю '{second}'...")
-    if run_cli(["prepare-chat", "--project", second]) != 0:
-        print("Не удалось подготовить второй проект.")
-        return
-    print()
-    print("Готово. Теперь откройте второй новый чат в LM Studio для второго проекта.")
-
-
-def show_guide() -> None:
-    print("Быстрый сценарий для двух проектов:")
-    print()
-    print("A) Первый чат (например: test2):")
-    print("   - Нажмите [3] Подготовить проект к чату")
-    print("   - Введите: test2")
-    print("   - В LM Studio откройте новый чат и подключите MCP")
-    print()
-    print("B) Второй чат (например: test1):")
-    print("   - Снова нажмите [3], введите: test1")
-    print("   - В LM Studio откройте НОВЫЙ чат для test1")
+def prepared_facts(project: str) -> dict[str, str]:
+    active = load_active_project() or "<none>"
+    memory = ROOT / "data" / "memory" / "projects" / project
+    index_count = "0"
+    index_path = memory / "index.json"
+    if index_path.is_file():
+        try:
+            payload = json.loads(index_path.read_text(encoding="utf-8"))
+            index_count = str(payload.get("file_count", 0))
+        except (json.JSONDecodeError, OSError):
+            index_count = "unknown"
+    brief_path = ROOT / "data" / "context" / "briefs" / project / "latest.md"
+    return {
+        "active_project": active,
+        "index_file_count": index_count,
+        "brief_path": str(brief_path),
+    }
 
 
 def menu() -> None:
     print("[1] Проверка статуса")
     print("[2] Bootstrap (только при первом запуске)")
-    print("[3] Подготовить проект к новому чату (prepare-chat)")
-    print("[4] Поиск по проекту (search-project)")
-    print("[5] Показать проекты")
-    print("[6] Подсказка по переключению test1/test2")
-    print("[7] Мастер: подготовить два проекта подряд")
+    print("[3] Выбрать директорию (workspace) и подготовить чат")
     print("[0] Выход")
     print()
 
@@ -179,25 +178,15 @@ def main() -> int:
         menu()
         choice = input("Выберите пункт меню: ").strip()
         if choice == "1":
-            run_cli(["status"])
+            result = run_cli(["status"], show_output=True)
+            print("OK" if result.returncode == 0 else "Требуется действие")
             pause()
         elif choice == "2":
-            run_cli(["bootstrap"])
+            result = run_cli(["bootstrap"], show_output=True)
+            print("OK" if result.returncode == 0 else "Требуется действие")
             pause()
         elif choice == "3":
             prepare_project()
-            pause()
-        elif choice == "4":
-            search_project()
-            pause()
-        elif choice == "5":
-            run_cli(["list-projects"])
-            pause()
-        elif choice == "6":
-            show_guide()
-            pause()
-        elif choice == "7":
-            wizard_two_projects()
             pause()
         elif choice == "0":
             print("Выход.")
