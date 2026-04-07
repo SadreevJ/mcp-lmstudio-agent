@@ -1,0 +1,7 @@
+{
+  "base_url": "http://127.0.0.1:1234",
+  "requires_authentication": true,
+  "allow_per_request_mcps": true,
+  "allow_servers_from_mcp_json": true,
+  "serve_on_local_network": false
+}
