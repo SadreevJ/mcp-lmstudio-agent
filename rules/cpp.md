@@ -1,4 +1,6 @@
 # C++ Rules
+_Rule set author: xUdav_
+
 # C++ Systems Engineering Rules
 
 ## 1. Safety & Undefined Behavior (UB)

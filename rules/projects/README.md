@@ -1,5 +1,7 @@
 # Project-Specific Rules
 
+_Rule set author: xUdav_
+
 Создавайте отдельный файл на проект:
 
 - `rules/projects/project1.md`

@@ -1,5 +1,7 @@
 # Python Rules
 
+_Rule set author: xUdav_
+
 # Engineering & Architecture Rules (Python / JS / Universal)
 
 ## 1. Anti-Hallucination & Quality
