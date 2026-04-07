@@ -1,2 +1,0 @@
-# Decision Log: project1
-

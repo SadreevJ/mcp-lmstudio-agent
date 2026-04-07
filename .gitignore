@@ -4,6 +4,10 @@ __pycache__/
 .env
 *.log
 data/context/index_cache/
+data/context/briefs/
+data/context/registry.json
+data/memory/
+workspace/
 config/mcp/mcp.json
 desktop.ini
 Thumbs.db

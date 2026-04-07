@@ -5,8 +5,10 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
+from local_ai_dev.application.briefing import BriefMeta, build_brief_markdown, load_index_json
 from local_ai_dev.domain.models import ProjectRecord, Registry
 from local_ai_dev.infrastructure.indexer import build_project_index
+from local_ai_dev.infrastructure.mcp_config import patch_lmstudio_filesystem_plugin, write_mcp_json
 from local_ai_dev.infrastructure.paths import AppPaths
 from local_ai_dev.infrastructure.store import RegistryStore, write_dataclass_json
 
@@ -37,6 +39,7 @@ class ProjectService:
             registry.active_project = sorted(registry.projects.keys())[0]
         self.registry_store.save(registry)
         logger.info("Bootstrap finished. projects=%s active=%s", len(registry.projects), registry.active_project)
+        self._try_sync_mcp()
         return registry
 
     def get_registry(self) -> Registry:
@@ -55,6 +58,7 @@ class ProjectService:
         registry.active_project = name
         self.registry_store.save(registry)
         logger.info("Switched active project to '%s'.", name)
+        self._try_sync_mcp()
         return registry
 
     def add_project(self, name: str, path: Path | None = None) -> Registry:
@@ -67,7 +71,41 @@ class ProjectService:
         self.registry_store.save(registry)
         self.ensure_project_memory(name)
         logger.info("Project '%s' added at %s.", name, target)
+        self._try_sync_mcp()
         return registry
+
+    def sync_mcp_config(self) -> Path:
+        registry = self.get_registry()
+        if registry.active_project is None:
+            raise ValueError("Нет активного проекта. Укажите через switch-project или add-project.")
+        rec = registry.projects.get(registry.active_project)
+        if rec is None:
+            raise ValueError(f"Активный проект '{registry.active_project}' не найден в реестре.")
+        project_root = rec.path.resolve()
+        if not project_root.is_dir():
+            raise ValueError(f"Папка проекта не существует: {project_root}")
+        project_name = registry.active_project
+        assert project_name is not None
+        self.ensure_project_memory(project_name)
+        briefs_root = self.paths.context / "briefs" / project_name
+        briefs_root.mkdir(parents=True, exist_ok=True)
+        extra_fs = [self.paths.projects_memory / project_name, briefs_root]
+        repo_root = self.paths.root.resolve()
+        mcp_path = repo_root / "config" / "mcp" / "mcp.json"
+        write_mcp_json(mcp_path, project_root, repo_root, extra_allowed=extra_fs)
+        patch_lmstudio_filesystem_plugin(project_root, repo_root, extra_allowed=extra_fs)
+        logger.info(
+            "MCP: filesystem разрешено — код: %s; память/брифы: %s",
+            project_root,
+            extra_fs,
+        )
+        return mcp_path
+
+    def _try_sync_mcp(self) -> None:
+        try:
+            self.sync_mcp_config()
+        except Exception as exc:
+            logger.warning("MCP конфиг не обновлён: %s", exc)
 
     def index_project(self, name: str | None = None, max_files: int = 1500) -> Path:
         registry = self.get_registry()
@@ -90,6 +128,48 @@ class ProjectService:
 
     def rebuild_context(self, name: str | None = None, max_files: int = 1500) -> Path:
         return self.index_project(name=name, max_files=max_files)
+
+    def build_brief(
+        self,
+        name: str | None = None,
+        format_name: str = "short",
+        handoff: bool = False,
+        write_history_copy: bool = True,
+    ) -> tuple[Path, BriefMeta]:
+        registry = self.get_registry()
+        project = name or registry.active_project
+        if project is None:
+            raise ValueError("Нет активного проекта.")
+        if project not in registry.projects:
+            raise ValueError(f"Проект '{project}' не найден в реестре.")
+        self.ensure_project_memory(project)
+        index_path = self.paths.projects_memory / project / "index.json"
+        payload = load_index_json(index_path)
+        memory_dir = self.paths.projects_memory / project
+        md, meta = build_brief_markdown(
+            paths=self.paths,
+            project=project,
+            registry_active=registry.active_project,
+            index_payload=payload,
+            memory_dir=memory_dir,
+            format_name=format_name,
+            handoff=handoff,
+        )
+        out_dir = self.paths.context / "briefs" / project
+        out_dir.mkdir(parents=True, exist_ok=True)
+        latest = out_dir / "latest.md"
+        latest.write_text(md, encoding="utf-8")
+        if write_history_copy:
+            stamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d-%H%M%S")
+            hist = out_dir / f"{stamp}.md"
+            hist.write_text(md, encoding="utf-8")
+        meta_path = out_dir / "brief-meta.json"
+        meta_path.write_text(
+            json.dumps(meta.to_json_dict(), indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        logger.info("Brief written for '%s' -> %s", project, latest)
+        return latest, meta
 
     def ensure_project_memory(self, name: str) -> None:
         project_dir = self.paths.projects_memory / name

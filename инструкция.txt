@@ -8,6 +8,10 @@ xUdav — быстрый старт на Windows (после clone, без фа�
 
 В репозитории после clone не будет: .env, config/mcp/mcp.json — их создаёте локально.
 
+Пульт с кнопками (Windows): дважды щёлкните gui.bat в корне или:
+  python scripts\gui_launcher.py
+Там же статус LM Studio и шаги 1–6 — можно не набирать команды вручную.
+
 Шаги:
 
   1. git clone <url> && cd xUdav
@@ -17,8 +21,11 @@ xUdav — быстрый старт на Windows (после clone, без фа�
 
   3. python scripts\run_cli.py bootstrap
 
-  4. powershell -ExecutionPolicy Bypass -File scripts\sync-mcp.ps1
-     Появится config\mcp\mcp.json с путями к этой машине.
+  4. python scripts\run_cli.py sync-mcp
+     (или powershell -ExecutionPolicy Bypass -File scripts\sync-mcp.ps1)
+     Появится config\mcp\mcp.json: корень MCP (файлы и shell) = папка АКТИВНОГО проекта в реестре.
+     При switch-project / add-project / bootstrap mcp.json тоже перезаписывается; в открытом чате LM Studio
+     всё равно переподключите MCP к файлу или начните новый чат.
 
   5. LM Studio (вручную):
      • Поднимите Local Server, загрузите модель.
@@ -29,5 +36,12 @@ xUdav — быстрый старт на Windows (после clone, без фа�
      Активный проект (реестр): scripts\switch-project.bat
      Статус и LM Studio: python scripts\run_cli.py status
 
+  7. Новый чат / восстановление контекста:
+     python scripts\run_cli.py brief
+     В консоли появится путь к data\context\briefs\<проект>\latest.md —
+     вставьте содержимое в LM Studio или откройте файл через MCP.
+     Полный бриф: ... brief --format full
+     Handoff: ... brief --handoff
+
 Плагин LM Studio «project-filesystem» может подставлять неверный относительный путь;
-если ENOENT на …\project-filesystem\workspace — снова выполните sync-mcp.ps1 (см. config\mcp\README.md).
+если ENOENT на …\project-filesystem\workspace — снова выполните sync-mcp (см. config\mcp\README.md).

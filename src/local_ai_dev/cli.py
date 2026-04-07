@@ -16,6 +16,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("bootstrap", help="Create baseline directories and registry.")
+    sub.add_parser("sync-mcp", help="Write config/mcp/mcp.json for the active project (filesystem + shell scope).")
     sub.add_parser("list-projects", help="List registered projects.")
 
     add_project = sub.add_parser("add-project", help="Add project to registry.")
@@ -40,6 +41,12 @@ def build_parser() -> argparse.ArgumentParser:
     log_decision.add_argument("text")
     log_decision.add_argument("--project", default=None)
 
+    brief = sub.add_parser("brief", help="Build session brief for a new chat (data/context/briefs/…).")
+    brief.add_argument("--project", default=None, help="Project name; default: active from registry.")
+    brief.add_argument("--format", choices=["short", "full"], default="short")
+    brief.add_argument("--handoff", action="store_true", help="Engineering handoff template instead of session brief.")
+    brief.add_argument("--no-history", action="store_true", help="Do not write timestamped copy of the brief.")
+
     return parser
 
 
@@ -59,6 +66,11 @@ def main(argv: list[str] | None = None) -> int:
             registry = service.bootstrap()
             _print_registry(registry, "Bootstrap completed")
             return 0
+        if args.command == "sync-mcp":
+            path = service.sync_mcp_config()
+            print(f"MCP: корень файлов и shell = активный проект. Записано: {path}")
+            print("В LM Studio переподключите MCP к этому файлу или откройте новый чат.")
+            return 0
         if args.command == "list-projects":
             registry = service.get_registry()
             _print_registry(registry, "Projects")
@@ -72,6 +84,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "switch-project":
             registry = service.switch_project(args.name)
             print(f"Active project: {registry.active_project}")
+            print("MCP обновлён под эту папку (см. config/mcp/mcp.json). Переподключите MCP в LM Studio.")
             return 0
         if args.command == "index-project":
             path = service.index_project(name=args.project, max_files=args.max_files)
@@ -84,6 +97,16 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "log-decision":
             path = service.append_decision(args.text, project=args.project)
             print(f"Decision appended: {path}")
+            return 0
+        if args.command == "brief":
+            path, meta = service.build_brief(
+                name=args.project,
+                format_name=args.format,
+                handoff=args.handoff,
+                write_history_copy=not args.no_history,
+            )
+            print(path.resolve())
+            print(f"format={meta.format} rules={','.join(meta.rules_applied) or '(none)'}")
             return 0
         if args.command == "status":
             registry = service.get_registry()

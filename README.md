@@ -30,9 +30,11 @@
 | Путь | Назначение |
 |------|------------|
 | `src/local_ai_dev/` | Python: реестр проектов, bootstrap, статус LM Studio, индекс. |
+| `src/local_ai_dev/gui/` | Опциональный пульт Tkinter (`scripts/gui_launcher.py`, `gui.bat`). |
 | `scripts/` | Вход: `run_cli.py`, `*.bat` / `*.sh`. |
 | `workspace/` | Ваши проекты (произвольные имена папок). |
 | `data/context/registry.json` | Активный проект и пути. |
+| `data/context/briefs/<имя>/` | Сгенерированные брифы для нового чата (`latest.md`, история, `brief-meta.json`; в git не коммитится). |
 | `data/memory/projects/<имя>/` | summary, notes, index и т.д. |
 | `rules/` | Правила для модели (глобальные, по языку, по проекту). |
 | `config/mcp/` | Шаблон и сгенерированный `mcp.json` (в git не коммитится). |
@@ -43,19 +45,29 @@
 
 Пошагово в **`инструкция.txt`**.
 
+**Пульт (Tkinter, без терминала):** дважды щёлкните **`gui.bat`** в корне или выполните `python scripts\gui_launcher.py` — те же шаги (bootstrap, MCP, проект, бриф), статус LM Studio и лог команд.
+
 Общие команды:
 
 ```text
 python scripts\run_cli.py bootstrap
+python scripts\run_cli.py sync-mcp
 python scripts\run_cli.py status
+python scripts\run_cli.py brief
+python scripts\run_cli.py brief --format full
+python scripts\run_cli.py brief --handoff
 python scripts\run_cli.py --help
 ```
 
-MCP под ваши абсолютные пути:
+**Новая сессия в LM Studio:** после `index-project` / `rebuild-context` (если код менялся) выполните `brief`, откройте напечатанный путь `data\context\briefs\<проект>\latest.md` — вставьте в чат или попросите модель прочитать этот файл через MCP. `--handoff` — шаблон «передачи смены»; `--no-history` — не писать копию с timestamp.
+
+MCP под машину и **активный проект** (корень файлов и shell = `workspace/<имя>` из реестра):
 
 ```text
-powershell -ExecutionPolicy Bypass -File scripts\sync-mcp.ps1
+python scripts\run_cli.py sync-mcp
 ```
+
+То же: `powershell -ExecutionPolicy Bypass -File scripts\sync-mcp.ps1`. Подробности — `config/mcp/README.md`.
 
 LM Studio (сервер, модель, вложение `config\mcp\mcp.json` в чат) — **настраиваете вручную** в приложении.
 
