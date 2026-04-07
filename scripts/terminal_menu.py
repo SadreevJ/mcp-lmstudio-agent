@@ -30,6 +30,10 @@ def run_cli(args: list[str], *, show_output: bool = False) -> subprocess.Complet
     return completed
 
 
+def has_any_output(result: subprocess.CompletedProcess[str]) -> bool:
+    return bool((result.stdout or "").strip() or (result.stderr or "").strip())
+
+
 def ensure_bootstrap() -> None:
     registry = ROOT / "data" / "context" / "registry.json"
     if registry.is_file():
@@ -80,7 +84,16 @@ def prepare_project() -> None:
         if err:
             print(err.splitlines()[-1])
         return
+    if not has_any_output(result):
+        print("Требуется действие: пустой вывод shell, верификация не подтверждена.")
+        return
     summary = prepared_facts(project)
+    if summary["brief_exists"] != "true":
+        print("Требуется действие: brief не найден после prepare-chat.")
+        return
+    if summary["active_project"] != project:
+        print("Требуется действие: активный проект после prepare-chat не совпадает с выбранным.")
+        return
     print("OK: проект подготовлен.")
     print(f"- active_project: {summary['active_project']}")
     print(f"- index_file_count: {summary['index_file_count']}")
@@ -103,20 +116,10 @@ def load_registry_payload() -> dict:
 
 
 def list_workspace_projects() -> list[str]:
-    payload = load_registry_payload()
-    projects = payload.get("projects") or {}
-    workspace_root = (ROOT / "workspace").resolve()
-    names: list[str] = []
-    for name, rec in projects.items():
-        raw_path = rec.get("path")
-        if not raw_path:
-            continue
-        try:
-            p = Path(raw_path).resolve()
-        except OSError:
-            continue
-        if p.parent == workspace_root:
-            names.append(str(name))
+    workspace_root = ROOT / "workspace"
+    if not workspace_root.is_dir():
+        return []
+    names = [p.name for p in workspace_root.iterdir() if p.is_dir()]
     names.sort()
     return names
 
@@ -160,6 +163,7 @@ def prepared_facts(project: str) -> dict[str, str]:
         "active_project": active,
         "index_file_count": index_count,
         "brief_path": str(brief_path),
+        "brief_exists": "true" if brief_path.is_file() else "false",
     }
 
 
@@ -179,11 +183,17 @@ def main() -> int:
         choice = input("Выберите пункт меню: ").strip()
         if choice == "1":
             result = run_cli(["status"], show_output=True)
-            print("OK" if result.returncode == 0 else "Требуется действие")
+            if result.returncode == 0 and has_any_output(result):
+                print("OK")
+            else:
+                print("Требуется действие")
             pause()
         elif choice == "2":
             result = run_cli(["bootstrap"], show_output=True)
-            print("OK" if result.returncode == 0 else "Требуется действие")
+            if result.returncode == 0 and has_any_output(result):
+                print("OK")
+            else:
+                print("Требуется действие")
             pause()
         elif choice == "3":
             prepare_project()

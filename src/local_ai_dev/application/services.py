@@ -6,7 +6,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from local_ai_dev.application.briefing import BriefMeta, build_brief_markdown, load_index_json
-from local_ai_dev.domain.models import ProjectRecord, Registry
+from local_ai_dev.application.guard import check_execution_guard
+from local_ai_dev.application.verification import verify_completion_contract
+from local_ai_dev.domain.models import CompletionContract, ExecutionGuardState, ProjectRecord, Registry, TaskOutcome
 from local_ai_dev.infrastructure.indexer import build_project_index
 from local_ai_dev.infrastructure.mcp_config import patch_lmstudio_filesystem_plugin, write_mcp_json
 from local_ai_dev.infrastructure.paths import AppPaths
@@ -184,11 +186,34 @@ class ProjectService:
         brief_path, _ = self.build_brief(name=project, format_name=format_name, handoff=False, write_history_copy=True)
         index_payload = load_index_json(self.paths.projects_memory / project / "index.json") or {}
         indexed_count = int(index_payload.get("file_count", 0))
+        if indexed_count < 0:
+            raise ValueError("Некорректный индекс проекта: file_count < 0.")
+        if not brief_path.is_file():
+            raise ValueError(f"Brief не создан: {brief_path}")
         self._append_worklog(
             project,
-            f"Подготовлен новый чат: active={project}, indexed_files={indexed_count}, brief={brief_path.name}, format={format_name}.",
+            "event=prepare_chat "
+            f"active_project={project} "
+            f"indexed_files={indexed_count} "
+            f"brief_path={brief_path.as_posix()} "
+            f"brief_exists=true "
+            f"format={format_name}",
         )
         return project, brief_path
+
+    def get_prepared_facts(self, project: str) -> dict[str, str]:
+        registry = self.get_registry()
+        active = registry.active_project or "<none>"
+        index_path = self.paths.projects_memory / project / "index.json"
+        brief_path = self.paths.context / "briefs" / project / "latest.md"
+        index_payload = load_index_json(index_path) or {}
+        indexed_count = int(index_payload.get("file_count", 0))
+        return {
+            "active_project": active,
+            "index_file_count": str(indexed_count),
+            "brief_path": str(brief_path),
+            "brief_exists": "true" if brief_path.is_file() else "false",
+        }
 
     def build_brief(
         self,
@@ -231,6 +256,107 @@ class ProjectService:
         )
         logger.info("Brief written for '%s' -> %s", project, latest)
         return latest, meta
+
+    def finalize_task(
+        self,
+        *,
+        name: str | None = None,
+        requested_status: str,
+        contract: CompletionContract,
+        shell_exit_code: int | None = None,
+        guard_state: ExecutionGuardState | None = None,
+    ) -> TaskOutcome:
+        registry = self.get_registry()
+        project = name or registry.active_project
+        if project is None:
+            raise ValueError("Нет активного проекта.")
+        if project not in registry.projects:
+            raise ValueError(f"Проект '{project}' не найден в реестре.")
+        project_root = registry.projects[project].path.resolve()
+        if not project_root.is_dir():
+            raise ValueError(f"Папка проекта не существует: {project_root}")
+
+        verification = verify_completion_contract(
+            project_root=project_root,
+            contract=contract,
+            shell_exit_code=shell_exit_code,
+        )
+
+        if not verification.passed and any(
+            item.startswith("environment_mismatch") for item in verification.reasons
+        ):
+            outcome = TaskOutcome(
+                status="blocked",
+                evidence=verification.evidence,
+                reason="; ".join(verification.reasons),
+            )
+            logger.info(
+                "Task blocked: environment mismatch. project=%s reason=%s evidence=%s",
+                project,
+                outcome.reason,
+                len(outcome.evidence),
+            )
+            self._append_worklog(
+                project,
+                "event=finalize_task "
+                "final_status=blocked "
+                f"evidence_count={len(outcome.evidence)} "
+                f"reason={outcome.reason}",
+            )
+            return outcome
+
+        if guard_state is not None:
+            guard_reason = check_execution_guard(guard_state)
+            if guard_reason:
+                outcome = TaskOutcome(
+                    status="blocked",
+                    evidence=verification.evidence,
+                    reason=guard_reason,
+                )
+                logger.info(
+                    "Task blocked by guard. project=%s reason=%s evidence=%s",
+                    project,
+                    guard_reason,
+                    len(outcome.evidence),
+                )
+                self._append_worklog(
+                    project,
+                    "event=finalize_task "
+                    "final_status=blocked "
+                    f"evidence_count={len(outcome.evidence)} "
+                    f"reason={guard_reason}",
+                )
+                return outcome
+
+        normalized = requested_status.strip().lower()
+        if normalized == "completed" and verification.passed:
+            outcome = TaskOutcome(status="completed", evidence=verification.evidence, reason="")
+        elif normalized == "completed" and not verification.passed:
+            reason = "; ".join(verification.reasons) or "contract_not_satisfied"
+            outcome = TaskOutcome(status="not_verified", evidence=verification.evidence, reason=reason)
+        else:
+            reason = "requested_status_not_completed"
+            if not verification.passed:
+                reason = f"{reason}; {'; '.join(verification.reasons)}"
+            outcome = TaskOutcome(status=normalized or "not_verified", evidence=verification.evidence, reason=reason)
+
+        logger.info(
+            "Task finalized. project=%s requested=%s final=%s evidence=%s reason=%s",
+            project,
+            normalized,
+            outcome.status,
+            len(outcome.evidence),
+            outcome.reason or "<none>",
+        )
+        self._append_worklog(
+            project,
+            "event=finalize_task "
+            f"requested_status={normalized or '<empty>'} "
+            f"final_status={outcome.status} "
+            f"evidence_count={len(outcome.evidence)} "
+            f"reason={outcome.reason or '<none>'}",
+        )
+        return outcome
 
     def ensure_project_memory(self, name: str) -> None:
         project_dir = self.paths.projects_memory / name

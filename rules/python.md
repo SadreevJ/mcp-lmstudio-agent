@@ -38,3 +38,9 @@ _Rule set author: xUdav_
 - Technical debt is acceptable if it is explicit, localized, and understood.
 - Do not introduce architectural complexity without a clear, present need.
 
+## 6. Agent execution: filesystem vs shell context
+- If filesystem tools show a file exists and `read` succeeds, but a shell command fails with “cannot open file” or wrong path, treat this as **environment mismatch** (different cwd or root), not “retry the same step”.
+- Do not claim **task complete** until shell verification matches the same resolved path as the project file (or you explicitly `cd` to project root and re-run with a path relative to that root).
+- When reporting failure, include **machine-checkable facts**: actual `shell` cwd, intended project root, and absolute path used in the shell command.
+- Prefer `finalize-task` with `--shell-cwd` / `--shell-target-path` when shell exit is non-zero but files on disk look correct, so the outcome can be **blocked** with `environment_mismatch:*` instead of an ambiguous retry loop.
+

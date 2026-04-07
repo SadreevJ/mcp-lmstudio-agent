@@ -5,6 +5,7 @@ import logging
 import os
 import sys
 
+from local_ai_dev.domain.models import CompletionContract, ExecutionGuardState
 from local_ai_dev.application.services import ProjectService
 from local_ai_dev.infrastructure.env import load_env_file
 from local_ai_dev.infrastructure.lmstudio import check_lmstudio
@@ -60,6 +61,39 @@ def build_parser() -> argparse.ArgumentParser:
     prepare.add_argument("--project", default=None)
     prepare.add_argument("--max-files", type=int, default=1500)
     prepare.add_argument("--format", choices=["short", "full"], default="short")
+
+    finalize = sub.add_parser(
+        "finalize-task",
+        help="Finalize task status against a completion contract.",
+    )
+    finalize.add_argument("--project", default=None)
+    finalize.add_argument("--requested-status", default="completed")
+    finalize.add_argument("--expect-file", action="append", default=[])
+    finalize.add_argument(
+        "--expect-contains",
+        action="append",
+        default=[],
+        help="Format: relative/path::text",
+    )
+    finalize.add_argument("--shell-exit-code", type=int, default=None)
+    finalize.add_argument(
+        "--shell-cwd",
+        default=None,
+        help="Reported shell working directory (for environment_mismatch vs project root).",
+    )
+    finalize.add_argument(
+        "--shell-target-path",
+        default=None,
+        help="Absolute path the shell used (e.g. from error); compared to first --expect-file.",
+    )
+    finalize.add_argument("--step-index", type=int, default=1)
+    finalize.add_argument("--max-steps", type=int, default=20)
+    finalize.add_argument("--action-fingerprint", default="")
+    finalize.add_argument("--previous-action-fingerprint", default="")
+    finalize.add_argument("--repeated-fingerprint-count", type=int, default=0)
+    finalize.add_argument("--max-repeated-fingerprint", type=int, default=2)
+    finalize.add_argument("--no-progress-steps", type=int, default=0)
+    finalize.add_argument("--max-no-progress-steps", type=int, default=3)
 
     return parser
 
@@ -146,10 +180,52 @@ def main(argv: list[str] | None = None) -> int:
                 max_files=args.max_files,
                 format_name=args.format,
             )
+            facts = service.get_prepared_facts(project)
             print(f"active_project={project}")
             print(f"brief={brief_path.resolve()}")
+            print(f"verified_active_project={facts['active_project']}")
+            print(f"verified_index_file_count={facts['index_file_count']}")
+            print(f"verified_brief_exists={facts['brief_exists']}")
             print("MCP обновлён под активный проект; в LM Studio откройте новый чат и подключите config/mcp/mcp.json.")
             return 0
+        if args.command == "finalize-task":
+            contains_map: dict[str, str] = {}
+            for raw in args.expect_contains:
+                if "::" not in raw:
+                    raise ValueError(f"Некорректный --expect-contains: '{raw}'. Ожидается relative/path::text")
+                path_part, text_part = raw.split("::", 1)
+                rel = path_part.strip()
+                if not rel:
+                    raise ValueError(f"Некорректный --expect-contains: '{raw}'. Путь не должен быть пустым")
+                contains_map[rel] = text_part
+            contract = CompletionContract(
+                required_file_exists=[item.strip() for item in args.expect_file if item.strip()],
+                required_text_contains=contains_map,
+                require_shell_exit_zero=args.shell_exit_code is not None,
+                shell_cwd=args.shell_cwd,
+                shell_target_path=args.shell_target_path,
+            )
+            guard_state = ExecutionGuardState(
+                step_index=args.step_index,
+                max_steps=args.max_steps,
+                action_fingerprint=args.action_fingerprint.strip(),
+                previous_action_fingerprint=args.previous_action_fingerprint.strip(),
+                repeated_fingerprint_count=args.repeated_fingerprint_count,
+                max_repeated_fingerprint=args.max_repeated_fingerprint,
+                no_progress_steps=args.no_progress_steps,
+                max_no_progress_steps=args.max_no_progress_steps,
+            )
+            outcome = service.finalize_task(
+                name=args.project,
+                requested_status=args.requested_status,
+                contract=contract,
+                shell_exit_code=args.shell_exit_code,
+                guard_state=guard_state,
+            )
+            print(f"final_status={outcome.status}")
+            print(f"evidence={','.join(outcome.evidence) if outcome.evidence else '(none)'}")
+            print(f"reason={outcome.reason or '(none)'}")
+            return 0 if outcome.status == "completed" else 1
         if args.command == "status":
             registry = service.get_registry()
             print("System status")

@@ -311,6 +311,7 @@ def build_brief_markdown(
             lines.append("- Не писать «сделано», пока нет подтверждённых tool-результатов.")
             lines.append("- Если правка не применена инструментами, явно указать «не применено».")
             lines.append("- Работать только в scope активного проекта и его memory/brief.")
+            lines.append("- Пустой (`null/empty`) shell-вывод считать непрошедшей верификацией.")
             lines.append("")
 
         lines.append("## Applicable rules (paths)\n")

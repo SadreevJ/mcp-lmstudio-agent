@@ -35,14 +35,14 @@ def build_mcp_json_payload(
     extra_allowed: Sequence[Path] | None = None,
 ) -> dict:
     roots = _filesystem_allowed_dirs(project_root, extra_allowed)
-    rr = str(repo_root.resolve())
+    pr_fs = str(project_root.resolve())
     pr_shell = str(project_root.resolve())
     return {
         "mcpServers": {
             "project-filesystem": {
                 "command": "npx",
                 "args": _filesystem_npx_args(roots),
-                "cwd": rr,
+                "cwd": pr_fs,
             },
             "project-shell": {
                 "command": "npx",
@@ -60,11 +60,11 @@ def build_lmstudio_plugin_filesystem_payload(
     extra_allowed: Sequence[Path] | None = None,
 ) -> dict:
     roots = _filesystem_allowed_dirs(project_root, extra_allowed)
-    rr = str(repo_root.resolve())
+    pr_fs = str(project_root.resolve())
     return {
         "command": "npx",
         "args": _filesystem_npx_args(roots),
-        "cwd": rr,
+        "cwd": pr_fs,
     }
 
 

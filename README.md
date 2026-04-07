@@ -79,6 +79,7 @@ python scripts\run_cli.py prepare-chat [--project <name>] [--max-files 1500] [--
 
 This keeps filesystem access, shell working directory, and memory/brief files aligned with one active project.
 `prepare-chat` is restricted to projects inside `workspace/`, which keeps sessions isolated and predictable.
+After `prepare-chat`, CLI prints verified facts (`active_project`, `index_file_count`, `brief_exists`) for fail-fast validation.
 
 ## Notes on MCP scope
 
