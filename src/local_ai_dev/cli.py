@@ -37,6 +37,12 @@ def build_parser() -> argparse.ArgumentParser:
     rebuild.add_argument("--project", default=None)
     rebuild.add_argument("--max-files", type=int, default=1500)
 
+    search = sub.add_parser("search-project", help="Search in active or chosen project.")
+    search.add_argument("--project", default=None)
+    search.add_argument("--mode", choices=["file", "text", "todo", "entrypoints", "defs"], default="file")
+    search.add_argument("--query", default="")
+    search.add_argument("--max-results", type=int, default=30)
+
     log_decision = sub.add_parser("log-decision", help="Append decision to decision log.")
     log_decision.add_argument("text")
     log_decision.add_argument("--project", default=None)
@@ -46,6 +52,14 @@ def build_parser() -> argparse.ArgumentParser:
     brief.add_argument("--format", choices=["short", "full"], default="short")
     brief.add_argument("--handoff", action="store_true", help="Engineering handoff template instead of session brief.")
     brief.add_argument("--no-history", action="store_true", help="Do not write timestamped copy of the brief.")
+
+    prepare = sub.add_parser(
+        "prepare-chat",
+        help="Switch project (optional), index, sync-mcp and build brief in one command.",
+    )
+    prepare.add_argument("--project", default=None)
+    prepare.add_argument("--max-files", type=int, default=1500)
+    prepare.add_argument("--format", choices=["short", "full"], default="short")
 
     return parser
 
@@ -94,6 +108,24 @@ def main(argv: list[str] | None = None) -> int:
             path = service.rebuild_context(name=args.project, max_files=args.max_files)
             print(f"Context rebuilt: {path}")
             return 0
+        if args.command == "search-project":
+            project, results = service.search_in_project(
+                name=args.project,
+                mode=args.mode,
+                query=args.query,
+                max_results=args.max_results,
+            )
+            print(f"project={project} mode={args.mode} results={len(results)}")
+            for item in results:
+                path = item.get("path", "")
+                line = item.get("line")
+                text = item.get("text", "")
+                kind = item.get("kind", "")
+                if line is None:
+                    print(f"- [{kind}] {path}")
+                else:
+                    print(f"- [{kind}] {path}:{line} {text}")
+            return 0
         if args.command == "log-decision":
             path = service.append_decision(args.text, project=args.project)
             print(f"Decision appended: {path}")
@@ -107,6 +139,16 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(path.resolve())
             print(f"format={meta.format} rules={','.join(meta.rules_applied) or '(none)'}")
+            return 0
+        if args.command == "prepare-chat":
+            project, brief_path = service.prepare_chat_context(
+                name=args.project,
+                max_files=args.max_files,
+                format_name=args.format,
+            )
+            print(f"active_project={project}")
+            print(f"brief={brief_path.resolve()}")
+            print("MCP обновлён под активный проект; в LM Studio откройте новый чат и подключите config/mcp/mcp.json.")
             return 0
         if args.command == "status":
             registry = service.get_registry()

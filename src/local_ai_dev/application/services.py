@@ -10,6 +10,7 @@ from local_ai_dev.domain.models import ProjectRecord, Registry
 from local_ai_dev.infrastructure.indexer import build_project_index
 from local_ai_dev.infrastructure.mcp_config import patch_lmstudio_filesystem_plugin, write_mcp_json
 from local_ai_dev.infrastructure.paths import AppPaths
+from local_ai_dev.infrastructure.project_search import search_project
 from local_ai_dev.infrastructure.store import RegistryStore, write_dataclass_json
 
 logger = logging.getLogger(__name__)
@@ -123,11 +124,58 @@ class ProjectService:
         write_dataclass_json(index_path, index)
         self._write_summary(active, index_path)
         self._append_session_note(active, f"Индекс пересобран: {index.file_count} файлов.")
+        self._append_worklog(active, f"Обновлён индекс проекта: {index.file_count} файлов.")
         logger.info("Indexed project '%s'. files=%s", active, index.file_count)
         return index_path
 
     def rebuild_context(self, name: str | None = None, max_files: int = 1500) -> Path:
         return self.index_project(name=name, max_files=max_files)
+
+    def search_in_project(
+        self,
+        *,
+        name: str | None = None,
+        mode: str = "file",
+        query: str = "",
+        max_results: int = 50,
+    ) -> tuple[str, list[dict[str, object]]]:
+        registry = self.get_registry()
+        active = name or registry.active_project
+        if active is None:
+            raise ValueError("Нет активного проекта.")
+        if active not in registry.projects:
+            raise ValueError(f"Проект '{active}' не найден в реестре.")
+        project_path = registry.projects[active].path
+        if not project_path.exists():
+            raise ValueError(f"Папка проекта '{active}' удалена: {project_path}")
+        results = search_project(
+            root=project_path,
+            mode=mode,
+            query=query,
+            max_results=max_results,
+        )
+        return active, results
+
+    def prepare_chat_context(
+        self,
+        *,
+        name: str | None = None,
+        max_files: int = 1500,
+        format_name: str = "short",
+    ) -> tuple[str, Path]:
+        registry = self.get_registry()
+        project = name or registry.active_project
+        if project is None:
+            raise ValueError("Нет активного проекта.")
+        if project not in registry.projects:
+            raise ValueError(f"Проект '{project}' не найден в реестре.")
+        if project != registry.active_project:
+            self.switch_project(project)
+        self.index_project(name=project, max_files=max_files)
+        self.sync_mcp_config()
+        brief_path, _ = self.build_brief(name=project, format_name=format_name, handoff=False, write_history_copy=True)
+        self._append_worklog(project, f"Подготовлен новый чат: brief={brief_path.name}, format={format_name}.")
+        return project, brief_path
 
     def build_brief(
         self,
@@ -179,6 +227,23 @@ class ProjectService:
             ("decision-log.md", f"# Decision Log: {name}\n\n"),
             ("known-issues.md", f"# Known Issues: {name}\n\n"),
             ("notes.md", f"# Notes: {name}\n\n"),
+            (
+                "architecture.md",
+                f"# Architecture: {name}\n\n"
+                "Ключевые компоненты и их роли:\n"
+                "- \n\n"
+                "Границы слоёв (domain/application/infrastructure):\n"
+                "- \n",
+            ),
+            (
+                "run-commands.md",
+                f"# Run Commands: {name}\n\n"
+                "Основные команды проекта:\n"
+                "- запуск: \n"
+                "- тесты: \n"
+                "- проверка/линт: \n",
+            ),
+            ("worklog.md", f"# Worklog: {name}\n\n"),
         ):
             target = project_dir / file_name
             if not target.exists():
@@ -210,12 +275,17 @@ class ProjectService:
     def _write_summary(self, project: str, index_path: Path) -> None:
         payload = json.loads(index_path.read_text(encoding="utf-8"))
         ext = payload.get("extension_stats", {})
+        files = list(payload.get("files") or [])
+        entrypoints_count = sum(1 for item in files if item.get("is_entrypoint") is True)
+        text_count = sum(1 for item in files if item.get("is_text") is True)
         summary = [
             f"# Summary: {project}",
             "",
             f"- Обновлено: {payload.get('generated_at', '<unknown>')}",
             f"- Корень проекта: `{payload.get('root', '')}`",
             f"- Проиндексировано файлов: {payload.get('file_count', 0)}",
+            f"- Текстовых файлов: {text_count}",
+            f"- Entrypoints: {entrypoints_count}",
             "",
             "## Распределение по расширениям",
         ]
@@ -229,3 +299,9 @@ class ProjectService:
         session_file = sessions_dir / f"{datetime.now(tz=timezone.utc):%Y-%m-%d}.md"
         with session_file.open("a", encoding="utf-8") as fh:
             fh.write(f"- [{project}] {datetime.now(tz=timezone.utc).isoformat()} {text}\n")
+
+    def _append_worklog(self, project: str, text: str) -> None:
+        worklog = self.paths.projects_memory / project / "worklog.md"
+        stamp = datetime.now(tz=timezone.utc).isoformat()
+        with worklog.open("a", encoding="utf-8") as fh:
+            fh.write(f"- {stamp} {text}\n")

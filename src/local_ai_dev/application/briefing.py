@@ -77,12 +77,27 @@ def _stack_guess(ext_stats: dict[str, int], file_count: int) -> list[str]:
     total = sum(ext_stats.values()) or file_count or 1
     py_n = ext_stats.get(".py", 0)
     cpp_n = ext_stats.get(".cpp", 0) + ext_stats.get(".h", 0) + ext_stats.get(".hpp", 0) + ext_stats.get(".c", 0)
+    web_n = ext_stats.get(".js", 0) + ext_stats.get(".ts", 0) + ext_stats.get(".tsx", 0) + ext_stats.get(".html", 0) + ext_stats.get(".css", 0)
     guess: list[str] = []
     if py_n / total >= _PY_SHARE_MIN or (py_n >= 1 and total <= 5):
         guess.append("python")
     if cpp_n / total >= _CPP_SHARE_MIN or (cpp_n >= 1 and total <= 5):
         guess.append("cpp")
+    if web_n / total >= 0.08 or (web_n >= 1 and total <= 5):
+        guess.append("web")
     return guess
+
+
+def _entrypoint_names_from_index(files: list[dict], limit: int = 20) -> list[str]:
+    picked: list[str] = []
+    for item in files:
+        if item.get("is_entrypoint") is True:
+            path = str(item.get("path", "")).strip()
+            if path:
+                picked.append(path)
+        if len(picked) >= limit:
+            break
+    return picked
 
 
 def pick_rules_paths(paths: AppPaths, project: str, ext_stats: dict[str, int], file_count: int) -> tuple[list[str], list[str]]:
@@ -114,19 +129,43 @@ def pick_rules_paths(paths: AppPaths, project: str, ext_stats: dict[str, int], f
 
 
 def _priority_paths_from_index(files: list[dict], limit: int) -> list[str]:
-    names_priority = {"main.py", "app.py", "__main__.py", "CMakeLists.txt", "README.md", "pyproject.toml"}
-    paths_list = [f.get("path", "") for f in files if f.get("path")]
     scored: list[tuple[int, str]] = []
-    for p in paths_list:
-        base = Path(p).name.lower()
-        score = 100
-        if base in {n.lower() for n in names_priority}:
-            score = 0
-        elif base.endswith(".py"):
-            score = 10
-        scored.append((score, p))
+    for item in files:
+        path_value = str(item.get("path", "")).strip()
+        if not path_value:
+            continue
+        if "priority_score" in item:
+            raw_score = item.get("priority_score")
+            try:
+                score = int(raw_score)
+            except (TypeError, ValueError):
+                score = 100
+        else:
+            base = Path(path_value).name.lower()
+            score = 100
+            if base in {"main.py", "app.py", "__main__.py", "cmakelists.txt", "readme.md", "pyproject.toml"}:
+                score = 0
+            elif base.endswith(".py"):
+                score = 10
+        scored.append((score, path_value))
     scored.sort(key=lambda x: (x[0], x[1]))
-    return [p for _, p in scored[:limit]]
+    return [path for _, path in scored[:limit]]
+
+
+def _top_level_dirs_from_index(files: list[dict], limit: int = 8) -> list[str]:
+    dirs: list[str] = []
+    seen: set[str] = set()
+    for item in files:
+        path_value = str(item.get("path", "")).strip()
+        if not path_value or "/" not in path_value:
+            continue
+        top = path_value.split("/", 1)[0]
+        if top and top not in seen:
+            seen.add(top)
+            dirs.append(top)
+        if len(dirs) >= limit:
+            break
+    return dirs
 
 
 def build_brief_markdown(
@@ -150,6 +189,7 @@ def build_brief_markdown(
         index_generated_at = index_payload.get("generated_at")
         idx_files = list(index_payload.get("files") or [])
         file_count = int(index_payload.get("file_count") or len(idx_files))
+    entrypoints = _entrypoint_names_from_index(idx_files, limit=20)
 
     rules_paths, stack = pick_rules_paths(paths, project, ext_stats, file_count)
 
@@ -221,6 +261,23 @@ def build_brief_markdown(
             lines.append("- Перед работой: `python scripts/run_cli.py index-project` (или `--project " + project + "`).")
         lines.append(f"- Эвристика стека: `{', '.join(stack)}`")
         lines.append("")
+        lines.append("## Стартовый чеклист\n")
+        lines.append("- Убедитесь, что MCP подключён в LM Studio к `config/mcp/mcp.json`.")
+        lines.append("- Для нового чата используйте свежий `latest.md` из `data/context/briefs/<project>/`.")
+        lines.append("- При изменениях в дереве проекта запустите `rebuild-context`.")
+        lines.append("")
+
+        if entrypoints:
+            lines.append("## Entrypoints (from index)\n")
+            for p in entrypoints[:8]:
+                lines.append(f"- `{p}`")
+            lines.append("")
+        top_dirs = _top_level_dirs_from_index(idx_files, limit=8)
+        if top_dirs:
+            lines.append("## Ключевые директории\n")
+            for d in top_dirs:
+                lines.append(f"- `{d}/`")
+            lines.append("")
 
         add_section("Summary", _read_text_limited(memory_dir / "summary.md", 4500 if format_name == "short" else 12000))
 
@@ -231,9 +288,12 @@ def build_brief_markdown(
             "Recent decisions",
             _read_tail_lines(memory_dir / "decision-log.md", short_tail if format_name == "short" else 35),
         )
+        add_section("Worklog (tail)", _read_tail_lines(memory_dir / "worklog.md", 10 if format_name == "short" else 35))
 
         if format_name == "full":
             add_section("Notes (tail)", _read_tail_lines(memory_dir / "notes.md", 30))
+            add_section("Architecture", _read_text_limited(memory_dir / "architecture.md", 4000))
+            add_section("Run commands", _read_text_limited(memory_dir / "run-commands.md", 3000))
 
         lines.append("## Applicable rules (paths)\n")
         for rp in rules_paths:
